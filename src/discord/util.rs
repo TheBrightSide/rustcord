@@ -1,10 +1,25 @@
 use std::time::{SystemTime, UNIX_EPOCH, Duration, SystemTimeError};
+use std::thread;
+use std::io;
 use json::object;
 use super::client::{GatewayOpcode, GatewayPayload};
 
 pub fn get_time() -> Result<Duration, SystemTimeError> {
     SystemTime::now().
         duration_since(UNIX_EPOCH)
+}
+
+// clone of thread::spawn but with a name parameter B)
+pub fn create_thread<F, T>(name: &str, func: F) -> thread::JoinHandle<T>
+where
+    F: std::ops::FnOnce() -> T,
+    F: std::marker::Send + 'static,
+    T: std::marker::Send + 'static,
+{
+    thread::Builder::new()
+        .name(name.into())
+        .spawn(func)
+        .unwrap()
 }
 
 // convert &str to GatewayPayload
@@ -38,12 +53,13 @@ pub fn deserialize_gateway_object(str_input: &str) -> Result<GatewayPayload, jso
     }
     
     if !parsed["t"].is_null() {
-        result.t = Option::from(String::from(parsed["t"].as_str().unwrap()));
+        result.t = Option::from(parsed["t"].as_str().unwrap());
     }
 
     Ok(result)
 }
 
+// convert GatewayPayload to String
 pub fn serialize_gateway_object(structured_object: &GatewayPayload) -> String {
     let mut data = object! {};
     
@@ -65,12 +81,12 @@ pub fn serialize_gateway_object(structured_object: &GatewayPayload) -> String {
     data["op"] = num_op.into();
     data["d"] = structured_object.d.as_ref().unwrap_or(&json::Null).clone();
 
-    match structured_object.s.as_ref().ok_or(false) {
+    match structured_object.s.as_ref().ok_or(()) {
         Ok(s) => data["s"] = s.clone().into(),
         Err(_) => data["s"] = json::Null
     };
 
-    match structured_object.t.as_ref().ok_or(false) {
+    match structured_object.t.as_ref().ok_or(()) {
         Ok(t) => data["t"] = t.clone().into(),
         Err(_) => data["t"] = json::Null
     };
