@@ -1,7 +1,12 @@
-use twilight_gateway::{Intents, Shard, EventTypeFlags, Event};
-use twilight_http::Client;
+use std::error::Error;
+use std::sync::atomic::*;
+use std::sync::Arc;
+use futures::stream::StreamExt;
 use http::header::{HeaderMap, HeaderName};
 use cursive::views::{Dialog, TextView};
+use twilight_gateway::{Intents, Shard, EventTypeFlags, Event, cluster::{Cluster, ShardScheme}};
+use twilight_http::Client;
+use twilight_cache_inmemory::{InMemoryCache, ResourceType};
 
 fn fetch_user_agent() -> String {
     if cfg!(unix) {
@@ -17,61 +22,94 @@ fn fetch_user_agent() -> String {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    env_logger::init();
+fn get_last_from_split(inp: &str) -> String {
+    let mut split = inp.rsplit(" ");
 
-    // const ALL_INTENTS = GUILDS | GUILD_MEMBERS | GUILD_BANS | GUILD_EMOJIS | GUILD_INTEGRATIONS | GUILD_WEBHOOKS | GUILD_INVITES | GUILD_VOICE_STATES | GUILD_PRESENCES | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS | GUILD_MESSAGE_TYPING | DIRECT_MESSAGES | DIRECT_MESSAGE_REACTIONS | DIRECT_MESSAGE_TYPING
+    split.next().unwrap().to_string()
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut token = String::new();
 
     println!("token login (email and password login not supported yet :/)");
     std::io::stdin().read_line(&mut token).expect("lol how'd this error");
 
+    token = token.trim().into();
+
+    // initialize headers prepended with every http request
     let mut default_headers = HeaderMap::new();
 
-    default_headers.insert(
-        HeaderName::from_lowercase(b"user-agent").unwrap(),
-        fetch_user_agent().trim().parse().unwrap()
-    );
-
+    // default_headers.insert(
+    //     HeaderName::from_lowercase(b"user-agent").unwrap(),
+    //     fetch_user_agent().trim().parse().unwrap()
+    // );
     default_headers.insert(
         HeaderName::from_lowercase(b"authorization").unwrap(),
-        token.trim().parse().unwrap()
+        token.parse().unwrap()
     );
     
+    // build http client
     let http_client = Client::builder()
         .default_headers(default_headers)
         .build();
+
+    println!("{:?}", http_client.current_user().await);
     
-    let (shard, mut events) = Shard::builder(&token, Intents::empty())
-        // .event_types(event_types)
-        .http_client(http_client)
+    // build gateway websocket client
+    let (shard, mut events) = Shard::builder(get_last_from_split(&token).trim(), Intents::all())
+        .event_types(EventTypeFlags::all())
+        .http_client(http_client.clone())
         .build();
 
-    shard.start().await.unwrap();
+    shard.start().await?;
 
-    // while let Some(event) = events.await {
-    //     match event {
-    //         Event::MessageCreate(message) => {
-    //             println!("message received with content: {}", message.content);
-    //         },
-    //         Event::MessageDelete(message) => {
-    //             println!("message with ID {} deleted", message.id);
-    //         },
-    //         _ => {},
-    //     }
-    // }
+    // define shard scheme
+    // let scheme = ShardScheme::Auto;
 
-    // let tui_thread = thread::spawn(move || {
-    //     let mut siv = cursive::default();
+    // build cluster
+    // let (cluster, mut events) = Cluster::builder(get_last_from_split(&token), Intents::all())
+    //     .http_client(http_client)
+    //     .shard_scheme(scheme)
+    //     .build()
+    //     .await?;
 
-    //     siv.add_layer(Dialog::around(TextView::new("dialog..?"))
-    //         .title("title")
-    //         .button("quit", |s| s.quit())
-    //     );
+    // let cluster_spawn = cluster.clone();
 
-    //     siv.run();
+    // tokio::spawn(async move {
+    //     cluster_spawn.up().await;
     // });
 
-    // tui_thread.join().unwrap();
+    let cache = InMemoryCache::builder()
+        .resource_types(ResourceType::all())
+        .build();
+    
+    let mut last_msg_id = Arc::new(AtomicU64::new(0));
+    
+    tokio::spawn(async move {
+        // let mut siv = cursive::default();
+            
+        // siv.add_layer(
+        //     Dialog::around(TextView::new(format!("{:?}", last_msg_id)))
+        //         .title("title")
+        //         .button("quit", |s| s.quit())
+        // );
+
+        // siv.run();
+    });
+
+
+    loop {
+        while let Some(event) = events.next().await {
+            cache.update(&event);
+
+            match event {
+                Event::MessageCreate(msg) => {
+                    // println!("msg with id {} has been created", msg.id);
+                    last_msg_id.store(msg.id.to_string().parse().unwrap(), Ordering::SeqCst);
+                },
+                _ => {}
+            }
+        }
+    } 
 }
