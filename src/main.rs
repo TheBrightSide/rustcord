@@ -1,12 +1,21 @@
+mod state;
+
+use state::ClientState;
+
 use std::error::Error;
-use std::sync::atomic::*;
-use std::sync::Arc;
+
 use futures::stream::StreamExt;
+use std::sync::mpsc;
+
 use http::header::{HeaderMap, HeaderName};
-use cursive::views::{Dialog, TextView};
-use twilight_gateway::{Intents, Shard, EventTypeFlags, Event, cluster::{Cluster, ShardScheme}};
+
+use twilight_gateway::{Intents, Shard, EventTypeFlags, Event};
 use twilight_http::Client;
-use twilight_cache_inmemory::{InMemoryCache, ResourceType};
+
+use tui::Terminal;
+use tui::backend::CrosstermBackend;
+use tui::widgets::{Block, Borders, List, ListItem};
+use tui::layout::{Layout, Constraint, Direction};
 
 fn fetch_user_agent() -> String {
     if cfg!(unix) {
@@ -53,17 +62,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_client = Client::builder()
         .default_headers(default_headers)
         .build();
-
-    println!("{:?}", http_client.current_user().await);
     
     // build gateway websocket client
     let (shard, mut events) = Shard::builder(get_last_from_split(&token).trim(), Intents::all())
         .event_types(EventTypeFlags::all())
         .http_client(http_client.clone())
         .build();
-
-    shard.start().await?;
-
+    
     // define shard scheme
     // let scheme = ShardScheme::Auto;
 
@@ -79,37 +84,36 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // tokio::spawn(async move {
     //     cluster_spawn.up().await;
     // });
-
-    let cache = InMemoryCache::builder()
-        .resource_types(ResourceType::all())
-        .build();
     
-    let mut last_msg_id = Arc::new(AtomicU64::new(0));
-    
-    tokio::spawn(async move {
-        // let mut siv = cursive::default();
-            
-        // siv.add_layer(
-        //     Dialog::around(TextView::new(format!("{:?}", last_msg_id)))
-        //         .title("title")
-        //         .button("quit", |s| s.quit())
-        // );
+    let (tx, rx) = mpsc::channel::<Event>();
+    let mut state: ClientState = ClientState::new();
 
-        // siv.run();
-    });
+    let ui_task = tokio::spawn(async move {
+        loop {
+            // let state_clone = state.clone();
 
-
-    loop {
-        while let Some(event) = events.next().await {
-            cache.update(&event);
-
-            match event {
-                Event::MessageCreate(msg) => {
-                    // println!("msg with id {} has been created", msg.id);
-                    last_msg_id.store(msg.id.to_string().parse().unwrap(), Ordering::SeqCst);
-                },
-                _ => {}
+            // event processing section
+            let data = rx.try_recv();
+            if !data.is_err() {
+                state.process_event(data.unwrap());
             }
         }
-    } 
+    });
+
+    shard.start().await?;
+
+    let gateway_task = tokio::spawn(async move {
+        loop {
+            while let Some(event) = events.next().await {
+                tx.send(event).unwrap();
+            }
+        }
+    });
+    
+    tokio::join!(
+        ui_task,
+        gateway_task
+    );
+
+    Ok(())
 }
