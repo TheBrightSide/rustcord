@@ -3,6 +3,7 @@ mod state;
 use state::ClientState;
 
 use std::error::Error;
+use std::io;
 
 use futures::stream::StreamExt;
 use std::sync::mpsc;
@@ -14,9 +15,11 @@ use twilight_http::Client;
 
 use tui::Terminal;
 use tui::backend::CrosstermBackend;
+use tui::style::{Style, Modifier, Color};
 use tui::widgets::{Block, Borders, List, ListItem};
 use tui::layout::{Layout, Constraint, Direction};
 
+#[allow(dead_code)]
 fn fetch_user_agent() -> String {
     if cfg!(unix) {
         if std::env::consts::OS == "macos" {
@@ -32,7 +35,7 @@ fn fetch_user_agent() -> String {
 }
 
 fn get_last_from_split(inp: &str) -> String {
-    let mut split = inp.rsplit(" ");
+    let mut split = inp.rsplit(' ');
 
     split.next().unwrap().to_string()
 }
@@ -89,14 +92,52 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut state: ClientState = ClientState::new();
 
     let ui_task = tokio::spawn(async move {
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.clear().unwrap();
+
         loop {
-            // let state_clone = state.clone();
+            terminal.draw(|frame| {
+                if state.clone().authenticated {
+                    let chunks = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
+                        .split(frame.size());
+
+                    let items: Vec<ListItem> = state.clone().get_guilds().into_iter().map(
+                        |guild| ListItem::new(guild.name)
+                    ).rev().collect();
+
+                    let guild_list = List::new(items)
+                        .block(Block::default().title("Guilds").borders(Borders::ALL))
+                        .style(Style::default().fg(Color::White))
+                        .highlight_style(Style::default().add_modifier(Modifier::ITALIC));
+
+                    let message_block = Block::default()
+                        .title("Messages")
+                        .borders(Borders::ALL);
+                    
+                    frame.render_widget(guild_list, chunks[0]);
+                    frame.render_widget(message_block, chunks[1]);
+                } else {
+                    let block_size = frame.size();
+
+                    let block = Block::default()
+                        .title("logging in...")
+                        .borders(Borders::ALL);
+
+                    frame.render_widget(block, block_size);
+                }
+            }).unwrap();
 
             // event processing section
-            let data = rx.try_recv();
-            if !data.is_err() {
-                state.process_event(data.unwrap());
+            if let Ok(data) = rx.try_recv() {
+                state.process_event(data)
             }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     });
 
