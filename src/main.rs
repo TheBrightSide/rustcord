@@ -10,14 +10,14 @@ use std::sync::mpsc;
 
 use http::header::{HeaderMap, HeaderName};
 
-use twilight_gateway::{Intents, Shard, EventTypeFlags, Event};
+use twilight_gateway::{Event, EventTypeFlags, Intents, Shard};
 use twilight_http::Client;
 
-use tui::Terminal;
 use tui::backend::CrosstermBackend;
-use tui::style::{Style, Modifier, Color};
+use tui::layout::{Constraint, Direction, Layout};
+use tui::style::{Color, Modifier, Style};
 use tui::widgets::{Block, Borders, List, ListItem};
-use tui::layout::{Layout, Constraint, Direction};
+use tui::Terminal;
 
 #[allow(dead_code)]
 fn fetch_user_agent() -> String {
@@ -45,7 +45,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut token = String::new();
 
     println!("token login (email and password login not supported yet :/)");
-    std::io::stdin().read_line(&mut token).expect("lol how'd this error");
+    std::io::stdin()
+        .read_line(&mut token)
+        .expect("lol how'd this error");
 
     token = token.trim().into();
 
@@ -58,20 +60,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // );
     default_headers.insert(
         HeaderName::from_lowercase(b"authorization").unwrap(),
-        token.parse().unwrap()
+        token.parse().unwrap(),
     );
-    
+
     // build http client
-    let http_client = Client::builder()
-        .default_headers(default_headers)
-        .build();
-    
+    let http_client = Client::builder().default_headers(default_headers).build();
+
     // build gateway websocket client
     let (shard, mut events) = Shard::builder(get_last_from_split(&token).trim(), Intents::all())
         .event_types(EventTypeFlags::all())
         .http_client(http_client.clone())
         .build();
-    
+
     // define shard scheme
     // let scheme = ShardScheme::Auto;
 
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // tokio::spawn(async move {
     //     cluster_spawn.up().await;
     // });
-    
+
     let (tx, rx) = mpsc::channel::<Event>();
     let mut state: ClientState = ClientState::new();
 
@@ -99,38 +99,68 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         terminal.clear().unwrap();
 
         loop {
-            terminal.draw(|frame| {
-                if state.clone().authenticated {
-                    let chunks = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
-                        .split(frame.size());
+            terminal
+                .draw(|frame| {
+                    if state.clone().authenticated {
+                        let general_layout = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                            .split(frame.size());
 
-                    let items: Vec<ListItem> = state.clone().get_guilds().into_iter().map(
-                        |guild| ListItem::new(guild.name)
-                    ).rev().collect();
+                        let sidebar_layout = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                            .split(general_layout[0]);
 
-                    let guild_list = List::new(items)
-                        .block(Block::default().title("Guilds").borders(Borders::ALL))
-                        .style(Style::default().fg(Color::White))
-                        .highlight_style(Style::default().add_modifier(Modifier::ITALIC));
+                        let guilds = state.clone().get_guilds();
+                        let guild_list_items: Vec<ListItem> = guilds
+                            .clone()
+                            .into_iter()
+                            .map(|guild| ListItem::new(guild.name))
+                            .rev()
+                            .collect();
 
-                    let message_block = Block::default()
-                        .title("Messages")
-                        .borders(Borders::ALL);
-                    
-                    frame.render_widget(guild_list, chunks[0]);
-                    frame.render_widget(message_block, chunks[1]);
-                } else {
-                    let block_size = frame.size();
+                        let guild_list = List::new(guild_list_items)
+                            .block(Block::default().title("Guilds").borders(Borders::ALL))
+                            .style(Style::default().fg(Color::White))
+                            .highlight_style(Style::default().add_modifier(Modifier::ITALIC));
 
-                    let block = Block::default()
-                        .title("logging in...")
-                        .borders(Borders::ALL);
+                        let mut channel_list_items: Vec<ListItem> = vec![];
 
-                    frame.render_widget(block, block_size);
-                }
-            }).unwrap();
+                        if !guilds.is_empty() {
+                            let guild_channels =
+                                state.clone().get_channels(guilds[0].clone().id).unwrap();
+
+                            channel_list_items = guild_channels
+                                .clone()
+                                .into_iter()
+                                .map(|channel| ListItem::new(channel.name().to_string()))
+                                .rev()
+                                .collect();
+                        }
+
+                        let channel_list = List::new(channel_list_items)
+                            .block(Block::default().title("Channels").borders(Borders::ALL))
+                            .style(Style::default().fg(Color::White))
+                            .highlight_style(Style::default().add_modifier(Modifier::ITALIC));
+
+                        let message_block =
+                            Block::default().title("Messages").borders(Borders::ALL);
+
+                        frame.render_widget(guild_list, sidebar_layout[0]);
+                        frame.render_widget(channel_list, sidebar_layout[1]);
+                        frame.render_widget(message_block, general_layout[1]);
+                    } else {
+                        let block_size = frame.size();
+
+                        let block = Block::default()
+                            .title("logging in...")
+                            .borders(Borders::ALL);
+
+                        frame.render_widget(block, block_size);
+                    }
+                })
+                .unwrap();
 
             // event processing section
             if let Ok(data) = rx.try_recv() {
@@ -150,11 +180,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
     });
-    
-    tokio::join!(
-        ui_task,
-        gateway_task
-    );
+
+    tokio::join!(ui_task, gateway_task);
 
     Ok(())
 }

@@ -1,15 +1,15 @@
+use twilight_gateway::Event;
+use twilight_model::channel::GuildChannel;
+use twilight_model::channel::Message;
+use twilight_model::guild::Guild;
 use twilight_model::id::GuildId;
 use twilight_model::user::CurrentUser;
-use twilight_model::guild::Guild;
-use twilight_model::channel::Channel;
-use twilight_model::channel::Message;
-use twilight_gateway::Event;
 
 #[derive(Clone)]
 pub struct StatusGuild {
     available: bool,
     id: GuildId,
-    guild: Option<Guild>
+    guild: Option<Guild>,
 }
 
 #[derive(Clone)]
@@ -18,8 +18,8 @@ pub struct ClientState {
     pub guilds: Vec<StatusGuild>,
     pub user: Option<CurrentUser>,
     pub current_guild: Option<Guild>,
-    pub current_channel: Option<Channel>,
-    pub current_channel_messages: Vec<Message>
+    pub current_channel: Option<GuildChannel>,
+    pub current_channel_messages: Vec<Message>,
 }
 
 impl ClientState {
@@ -30,7 +30,7 @@ impl ClientState {
             user: None,
             current_guild: None,
             current_channel: None,
-            current_channel_messages: vec![]
+            current_channel_messages: vec![],
         }
     }
 
@@ -39,36 +39,45 @@ impl ClientState {
             Event::Ready(data) => {
                 self.authenticated = true;
                 self.user = Option::from(data.user);
-                self.guilds = data.guilds.into_iter().map(|guild|
-                    StatusGuild {
+                self.guilds = data
+                    .guilds
+                    .into_iter()
+                    .map(|guild| StatusGuild {
                         available: false,
                         id: guild.id,
-                        guild: None
-                    }
-                ).rev().collect();
-            },
+                        guild: None,
+                    })
+                    .rev()
+                    .collect();
+            }
             Event::GuildCreate(data) => {
                 if self.guild_exists(data.0.id) {
-                    self.guilds = self.guilds.clone().into_iter().map(|guild| {
-                        if data.clone().0.id == guild.id {
-                            StatusGuild {
-                                available: true,
-                                id: guild.id,
-                                guild: Option::from(data.clone().0)
+                    self.guilds = self
+                        .guilds
+                        .clone()
+                        .into_iter()
+                        .map(|guild| {
+                            if data.clone().0.id == guild.id {
+                                StatusGuild {
+                                    available: true,
+                                    id: guild.id,
+                                    guild: Option::from(data.clone().0),
+                                }
+                            } else {
+                                StatusGuild {
+                                    available: false,
+                                    id: guild.id,
+                                    guild: None,
+                                }
                             }
-                        } else {
-                            StatusGuild {
-                                available: false,
-                                id: guild.id,
-                                guild: None
-                            }
-                        }
-                    }).rev().collect();
+                        })
+                        .rev()
+                        .collect();
                 } else {
                     self.guilds.push(StatusGuild {
                         available: true,
                         id: data.0.id,
-                        guild: Option::from(data.0)
+                        guild: Option::from(data.0),
                     })
                 }
             }
@@ -81,14 +90,30 @@ impl ClientState {
             .clone()
             .into_iter()
             .filter(|stat_guild| stat_guild.id == id)
-            .rev().count() > 1
+            .rev()
+            .count()
+            > 1
     }
 
     pub fn get_guilds(&mut self) -> Vec<Guild> {
         self.guilds
-            .clone().into_iter()
+            .clone()
+            .into_iter()
             .filter(|stat_guild| stat_guild.available)
             .map(|stat_guild| stat_guild.guild.unwrap())
-            .rev().collect()
+            .rev()
+            .collect()
+    }
+
+    pub fn get_channels(&mut self, guild_id: GuildId) -> Result<Vec<GuildChannel>, ()> {
+        match self
+            .get_guilds()
+            .into_iter()
+            .find(|guild| guild.id == guild_id)
+            .ok_or(())
+        {
+            Ok(guild) => Ok(guild.channels),
+            Err(_) => Err(()),
+        }
     }
 }
